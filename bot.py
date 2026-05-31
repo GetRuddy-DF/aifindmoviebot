@@ -51,6 +51,12 @@ def clean_movie_title(text: str) -> str:
     text = re.sub(r"[^a-z0-9\s]", "", text)
     return text.strip()
 
+def detect_language(text: str) -> str:
+    russian_chars = set('абвгдеёжзийклмнопрстуфхцчшщъыьэюяАБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ')
+    if any(char in russian_chars for char in text):
+        return "ru"
+    return "en"  
+
 
 def movie_keyboard(movie_id: int):
     return InlineKeyboardMarkup(
@@ -216,18 +222,18 @@ async def process_message(message: types.Message):
 
 
 async def find_movie(message: types.Message):
-    await message.answer("🔎 Думаю... ищу фильм...")
+    await message.answer("🔎 Thinking... searching for a movie...")
+
+    lang = detect_language(message.text)
+    tmdb_lang = "ru-RU" if lang == "ru" else "en-US"
+    system_prompt = (
+        "Write ONLY the original English movie title. No year. No explanation."
+    )
 
     gpt_response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {
-                "role": "system",
-                "content": (
-                    "Напиши ТОЛЬКО оригинальное название фильма "
-                    "на английском языке. Без года. Без пояснений."
-                )
-            },
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": message.text}
         ]
     )
@@ -236,7 +242,7 @@ async def find_movie(message: types.Message):
     query = clean_movie_title(raw_guess)
 
     if not query:
-        await message.answer("😔 Не понял фильм")
+        await message.answer("😔 Couldn't identify the movie" if lang == "en" else "😔 Не понял фильм")
         return
 
     search = requests.get(
@@ -244,22 +250,19 @@ async def find_movie(message: types.Message):
         params={
             "api_key": TMDB_KEY,
             "query": query,
-            "language": "ru-RU"
+            "language": tmdb_lang
         }
     ).json()
 
     results = search.get("results", [])
 
     if not results:
-        await message.answer(
-            f"😔 Не нашёл фильм.\nМой вариант: *{raw_guess}*",
-            parse_mode="Markdown"
-        )
+        msg = f"😔 Movie not found.\nMy guess: *{raw_guess}*" if lang == "en" else f"😔 Не нашёл фильм.\nМой вариант: *{raw_guess}*"
+        await message.answer(msg, parse_mode="Markdown")
         return
 
     movie = max(results, key=lambda x: x.get("popularity", 0))
     await send_movie_card(message, movie)
-
 
 # ================= CALLBACKS =================
 @dp.callback_query()
