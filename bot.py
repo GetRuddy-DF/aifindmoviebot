@@ -51,11 +51,11 @@ def clean_movie_title(text: str) -> str:
     text = re.sub(r"[^a-z0-9\s]", "", text)
     return text.strip()
 
+
 def detect_language(text: str) -> str:
-    russian_chars = set('абвгдеёжзийклмнопрстуфхцчшщъыьэюяАБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ')
-    if any(char in russian_chars for char in text):
+    if re.search(r"[а-яА-Я]", text):
         return "ru"
-    return "en"  
+    return "en"
 
 
 def movie_keyboard(movie_id: int):
@@ -79,17 +79,20 @@ def movie_keyboard(movie_id: int):
 async def send_movie_card(
     message: types.Message,
     movie: dict,
-    prefix: str = ""
+    prefix: str = "",
+    lang: str = "ru"
 ):
     movie_id = movie.get("id")
-    title = movie.get("title", "Без названия")
+    title = movie.get("title", "No title" if lang == "en" else "Без названия")
     rating = movie.get("vote_average", "—")
-    overview = movie.get("overview", "Описание отсутствует")
+    overview = movie.get("overview") or ("No description available" if lang == "en" else "Описание отсутствует")
     poster = movie.get("poster_path")
+
+    rating_label = "Rating" if lang == "en" else "Рейтинг"
 
     caption = (
         f"{prefix}*{title}*\n"
-        f"⭐ Рейтинг: {rating}\n\n"
+        f"⭐ {rating_label}: {rating}\n\n"
         f"{overview}"
     )
 
@@ -138,23 +141,23 @@ def get_trailer_url(movie_id: int):
     return None, None
 
 
-def get_similar_movies(movie_id: int, limit: int = 5):
+def get_similar_movies(movie_id: int, limit: int = 5, tmdb_lang: str = "ru-RU"):
     url = f"https://api.themoviedb.org/3/movie/{movie_id}/similar"
     params = {
         "api_key": TMDB_KEY,
-        "language": "ru-RU"
+        "language": tmdb_lang
     }
 
     data = requests.get(url, params=params).json()
     return data.get("results", [])[:limit]
 
 
-def get_evening_movie():
+def get_evening_movie(tmdb_lang: str = "ru-RU"):
     data = requests.get(
         "https://api.themoviedb.org/3/discover/movie",
         params={
             "api_key": TMDB_KEY,
-            "language": "ru-RU",
+            "language": tmdb_lang,
             "sort_by": "popularity.desc",
             "vote_average.gte": 7,
         }
@@ -164,12 +167,12 @@ def get_evening_movie():
     return random.choice(results)
 
 
-def get_movie_of_the_day():
+def get_movie_of_the_day(tmdb_lang: str = "ru-RU"):
     data = requests.get(
         "https://api.themoviedb.org/3/trending/movie/day",
         params={
             "api_key": TMDB_KEY,
-            "language": "ru-RU"
+            "language": tmdb_lang
         }
     ).json()
 
@@ -189,22 +192,25 @@ async def start(message: types.Message):
 
 @dp.message()
 async def process_message(message: types.Message):
+    lang = detect_language(message.text)
+    tmdb_lang = "ru-RU" if lang == "ru" else "en-US"
+
     if message.text == "🎬 Угадай фильм":
         await message.answer("Опиши фильм, который ты ищешь 🎬")
         return
 
     elif message.text == "🎯 Фильм на вечер":
-        movie = get_evening_movie()
+        movie = get_evening_movie(tmdb_lang)
         if movie:
-            await send_movie_card(message, movie, "🎯 *Фильм на вечер*\n\n")
+            await send_movie_card(message, movie, "🎯 *Фильм на вечер*\n\n", lang)
         else:
             await message.answer("😔 Не удалось подобрать фильм")
         return
 
     elif message.text == "🌟 Фильм дня":
-        movie = get_movie_of_the_day()
+        movie = get_movie_of_the_day(tmdb_lang)
         if movie:
-            await send_movie_card(message, movie, "🌟 *Фильм дня*\n\n")
+            await send_movie_card(message, movie, "🌟 *Фильм дня*\n\n", lang)
         else:
             await message.answer("😔 Сегодня без фильма дня")
         return
@@ -222,18 +228,19 @@ async def process_message(message: types.Message):
 
 
 async def find_movie(message: types.Message):
-    await message.answer("🔎 Thinking... searching for a movie...")
-
     lang = detect_language(message.text)
     tmdb_lang = "ru-RU" if lang == "ru" else "en-US"
-    system_prompt = (
-        "Write ONLY the original English movie title. No year. No explanation."
-    )
+
+    searching_msg = "🔎 Думаю... ищу фильм..." if lang == "ru" else "🔎 Thinking... searching for a movie..."
+    await message.answer(searching_msg)
 
     gpt_response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": system_prompt},
+            {
+                "role": "system",
+                "content": "Write ONLY the original English movie title. No year. No explanation."
+            },
             {"role": "user", "content": message.text}
         ]
     )
@@ -262,7 +269,8 @@ async def find_movie(message: types.Message):
         return
 
     movie = max(results, key=lambda x: x.get("popularity", 0))
-    await send_movie_card(message, movie)
+    await send_movie_card(message, movie, lang=lang)
+
 
 # ================= CALLBACKS =================
 @dp.callback_query()
